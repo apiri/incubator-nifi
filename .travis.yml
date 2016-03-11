@@ -17,3 +17,19 @@ before_install:
   - sed -i.bak -e 's|https://nexus.codehaus.org/snapshots/|https://oss.sonatype.org/content/repositories/codehaus-snapshots/|g' ~/.m2/settings.xml
 
 script: mvn clean install -Pcontrib-check
+
+env:
+  global:
+   # The next declaration is the encrypted COVERITY_SCAN_TOKEN, created
+   #   via the "travis encrypt" command using the project repo's public key
+   - secure: "Z9mAMHHBhwKjNDL1loOLlkELIsqsQv0mjjsgDUyYipL5h/ZjqBsuqEuAB79p7kcxIW3rlgwBfyfrEm3uz8Aq5nuF0gE8rCSQ96yPm6v0tscqCObKcxf3kikIxCvHfr7YL7TXZLgrNgAGhDd9Bd+HqcKs71ReX8odmo45oYmWM/k="
+
+addons:
+  coverity_scan:
+    project:
+      name: "apiri/incubator-nifi"
+      description: "Build submitted via Travis CI"
+    notification_email: aldrinpiri@gmail.com
+    build_command_prepend: "mvn clean"
+    build_command:   "mvn -DskipTests=true compile"
+    branch_pattern: coverity_scan
