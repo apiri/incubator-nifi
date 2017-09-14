@@ -16,20 +16,27 @@
 # under the License.
 #
 
-FROM openjdk:8-jre
+FROM openjdk:8-jre-alpine
 LABEL maintainer "Apache NiFi <dev@nifi.apache.org>"
 
-ARG UID=1000
-ARG GID=1000
 ARG NIFI_VERSION=1.4.0
-ARG MIRROR=https://archive.apache.org/dist
-
-ENV NIFI_BASE_DIR /opt/nifi 
-ENV NIFI_HOME=$NIFI_BASE_DIR/nifi-$NIFI_VERSION \
+    NIFI_USER=nifi
+    NIFI_GROUP=nifi
+    UID=1000
+    GID=1000
+    NIFI_BINARY
+    MIRROR=https://archive.apache.org/dist \
     NIFI_BINARY_URL=/nifi/$NIFI_VERSION/nifi-$NIFI_VERSION-bin.tar.gz
 
-# Setup NiFi user
-RUN groupadd -g $GID nifi || groupmod -n nifi `getent group $GID | cut -d: -f1` \
+
+ENV NIFI_USER=${NIFI_USER} \
+    NIFI_GROUP=${NIFI_GROUP} \
+    NIFI_BASE_DIR=/opt/nifi \
+    NIFI_HOME=$NIFI_BASE_DIR/nifi-$NIFI_VERSION \
+    NIFI_BINARY_URL=/nifi/$NIFI_VERSION/nifi-$NIFI_VERSION-bin.tar.gz
+
+# Setup NiFi user and group
+RUN addgroup -g ${GID} ${NIFI_GROUP} || adduser -g ${NIFI_USER} ${getent group $GID | cut -d: -f1} \
     && useradd --shell /bin/bash -u $UID -g $GID -m nifi \
     && mkdir -p $NIFI_HOME/conf/templates \
     && chown -R nifi:nifi $NIFI_BASE_DIR

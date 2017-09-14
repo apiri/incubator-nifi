@@ -46,14 +46,14 @@ language governing permissions and limitations under the License. -->
                             </execution>
                         </executions>
                         <configuration>
-                            <imageName>apachenifi</imageName>
+                            <imageName>apache/nifi</imageName>
                             <dockerDirectory>${project.basedir}/dockermaven</dockerDirectory>
                             <imageTags>
                                <imageTag>${nifi.version}</imageTag>
                             </imageTags>
                             <buildArgs>
-                                <UID>1000</UID>
-                                <GID>1000</GID>
+                                <NIFI_UID>1000</NIFI_UID>
+                                <NIFI_GID>1000</NIFI_GID>
                                 <NIFI_VERSION>${nifi.version}</NIFI_VERSION>
                                 <NIFI_BINARY>nifi-${nifi.version}-bin.tar.gz</NIFI_BINARY>
                             </buildArgs>

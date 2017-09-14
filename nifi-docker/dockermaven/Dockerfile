@@ -16,32 +16,39 @@
 # under the License.
 #
 
-FROM openjdk:8-jre
+FROM openjdk:8-jre-alpine
 LABEL maintainer "Apache NiFi <dev@nifi.apache.org>"
 
-ARG UID=1000
-ARG GID=1000
-ARG NIFI_VERSION
-ARG NIFI_BINARY
 
-ENV NIFI_BASE_DIR /opt/nifi
-ENV NIFI_HOME $NIFI_BASE_DIR/nifi-$NIFI_VERSION
+ARG NIFI_VERSION=1.4.0-SNAPSHOT
+ARG NIFI_USER=nifi
+ARG NIFI_GROUP=nifi
+ARG NIFI_UID=1000
+ARG NIFI_GID=1000
+ARG NIFI_BINARY=target/docker/nifi-${NIFI_VERSION}-bin.tar.gz
+ARG MIRROR=https://archive.apache.org/dist
+ARG NIFI_BINARY_URL=/nifi/${NIFI_VERSION}/nifi-${NIFI_VERSION}-bin.tar.gz
 
-# Setup NiFi user
-RUN groupadd -g $GID nifi || groupmod -n nifi `getent group $GID | cut -d: -f1` \
-    && useradd --shell /bin/bash -u $UID -g $GID -m nifi \
-    && mkdir -p $NIFI_HOME/conf/templates \
-    && chown -R nifi:nifi $NIFI_BASE_DIR
+ENV NIFI_BASE_DIR=/opt/nifi
+ENV NIFI_HOME=${NIFI_BASE_DIR}/nifi-${NIFI_VERSION} \
+    NIFI_BINARY_URL=/nifi/$NIFI_VERSION/nifi-$NIFI_VERSION-bin.tar.gz
 
-ADD $NIFI_BINARY $NIFI_BASE_DIR
-RUN chown -R nifi:nifi $NIFI_HOME
+# Setup NiFi user and group
+RUN addgroup -g ${NIFI_GID} ${NIFI_GROUP} && \
+    adduser -S -G "$(getent group ${NIFI_GID}| cut -d: -f1)" ${NIFI_USER} && \
+    mkdir -p ${NIFI_HOME}/conf/templates && \
+    chown -R ${NIFI_USER}:${NIFI_GROUP} ${NIFI_BASE_DIR}
 
-USER nifi
+ADD ${NIFI_BINARY} ${NIFI_BASE_DIR}
+RUN ls -laR ${NIFI_BASE_DIR}
+RUN chown -R ${NIFI_USER}:${NIFI_GROUP} ${NIFI_HOME}
+
+USER ${NIFI_USER}
 
 # Web HTTP Port & Remote Site-to-Site Ports
 EXPOSE 8080 8181
 
-WORKDIR $NIFI_HOME
+WORKDIR ${NIFI_HOME}
 
 # Startup NiFi
 ENTRYPOINT ["bin/nifi.sh"]
