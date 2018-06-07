@@ -1,0 +1,8 @@
+[submodule "minifi-assembly/nifi-minifi"]
+	path = minifi-assembly/nifi-minifi
+	url = git@github.com:apiri/nifi-minifi.git
+	branch = MINIFI-422
+[submodule "nifi-minifi"]
+	path = nifi-minifi
+	url = git@github.com:apiri/nifi-minifi.git
+	branch = MINIFI-422
