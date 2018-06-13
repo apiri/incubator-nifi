@@ -16,8 +16,19 @@
  */
 package org.apache.nifi.bootstrap;
 
+import configuration.ConfigurationChangeException;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.nifi.bootstrap.notification.NotificationType;
+import org.apache.nifi.bootstrap.util.OSUtils;
+import org.apache.nifi.util.file.FileUtils;
+import org.bouncycastle.util.io.TeeInputStream;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -32,6 +43,7 @@ import java.lang.reflect.Method;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystems;
@@ -44,6 +56,7 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -59,12 +72,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
-import org.apache.commons.lang3.StringUtils;
-import org.apache.nifi.bootstrap.notification.NotificationType;
-import org.apache.nifi.bootstrap.util.OSUtils;
-import org.apache.nifi.util.file.FileUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+
+import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
 
 /**
  * <p>
@@ -81,7 +90,7 @@ import org.slf4j.LoggerFactory;
  * <p>
  * If the {@code bootstrap.conf} file cannot be found, throws a {@code FileNotFoundException}.
  */
-public class RunNiFi {
+public class RunNiFi implements QueryableStatusAggregator, ConfigurationFileHolder {
 
     public static final String DEFAULT_CONFIG_FILE = "./conf/bootstrap.conf";
     public static final String DEFAULT_JAVA_CMD = "java";
@@ -1395,6 +1404,238 @@ public class RunNiFi {
 
         public boolean isProcessRunning() {
             return Boolean.TRUE.equals(processRunning);
+        }
+    }
+
+    public ConfigurationChangeCoordinator getChangeCoordinator() {
+        return changeCoordinator;
+    }
+
+    private ConfigurationChangeCoordinator initializeNotifier(ConfigurationChangeListener configChangeListener) throws IOException {
+        final Properties bootstrapProperties = getBootstrapProperties();
+
+        ConfigurationChangeCoordinator notifier = new ConfigurationChangeCoordinator();
+        notifier.initialize(bootstrapProperties, this, Collections.singleton(configChangeListener));
+        notifier.start();
+
+        return notifier;
+    }
+
+    public Set<PeriodicStatusReporter> getPeriodicStatusReporters() {
+        return Collections.unmodifiableSet(periodicStatusReporters);
+    }
+
+    public void shutdownPeriodicStatusReporters() {
+        for (PeriodicStatusReporter periodicStatusReporter : getPeriodicStatusReporters()) {
+            try {
+                periodicStatusReporter.stop();
+            } catch (Exception exception) {
+                System.out.println("Could not successfully stop periodic status reporter " + periodicStatusReporter.getClass() + " due to " + exception);
+            }
+        }
+    }
+
+    private Set<PeriodicStatusReporter> initializePeriodicNotifiers() throws IOException {
+        final Set<PeriodicStatusReporter> statusReporters = new HashSet<>();
+
+        final Properties bootstrapProperties = getBootstrapProperties();
+
+        final String reportersCsv = bootstrapProperties.getProperty(STATUS_REPORTER_COMPONENTS_KEY);
+        if (reportersCsv != null && !reportersCsv.isEmpty()) {
+            for (String reporterClassname : Arrays.asList(reportersCsv.split(","))) {
+                try {
+                    Class<?> reporterClass = Class.forName(reporterClassname);
+                    PeriodicStatusReporter reporter = (PeriodicStatusReporter) reporterClass.newInstance();
+                    reporter.initialize(bootstrapProperties, this);
+                    statusReporters.add(reporter);
+                } catch (InstantiationException | IllegalAccessException | ClassNotFoundException e) {
+                    throw new RuntimeException("Issue instantiating notifier " + reporterClassname, e);
+                }
+            }
+        }
+        return statusReporters;
+    }
+
+    private void startPeriodicNotifiers() throws IOException {
+        for (PeriodicStatusReporter periodicStatusReporter: this.periodicStatusReporters) {
+            periodicStatusReporter.start();
+        }
+    }
+
+    private static class MiNiFiConfigurationChangeListener implements ConfigurationChangeListener {
+
+        private final RunMiNiFi runner;
+        private final Logger logger;
+        private static final ReentrantLock handlingLock = new ReentrantLock();
+
+        public MiNiFiConfigurationChangeListener(RunMiNiFi runner, Logger logger) {
+            this.runner = runner;
+            this.logger = logger;
+        }
+
+        @Override
+        public void handleChange(InputStream configInputStream) throws ConfigurationChangeException {
+            logger.info("Received notification of a change");
+
+            if (!handlingLock.tryLock()) {
+                throw new ConfigurationChangeException("Instance is already handling another change");
+            }
+            try {
+
+                final Properties bootstrapProperties = runner.getBootstrapProperties();
+                final File configFile = new File(bootstrapProperties.getProperty(MINIFI_CONFIG_FILE_KEY));
+
+                // Store the incoming stream as a byte array to be shared among components that need it
+                final ByteArrayOutputStream bufferedConfigOs = new ByteArrayOutputStream();
+                byte[] copyArray = new byte[1024];
+                int available = -1;
+                while ((available = configInputStream.read(copyArray)) > 0) {
+                    bufferedConfigOs.write(copyArray, 0, available);
+                }
+
+                // Create an input stream to use for writing a config file as well as feeding to the config transformer
+                try (final ByteArrayInputStream newConfigBais = new ByteArrayInputStream(bufferedConfigOs.toByteArray())) {
+                    newConfigBais.mark(-1);
+
+                    final File swapConfigFile = runner.getSwapFile(logger);
+                    logger.info("Persisting old configuration to {}", swapConfigFile.getAbsolutePath());
+
+                    try (FileInputStream configFileInputStream = new FileInputStream(configFile)) {
+                        Files.copy(configFileInputStream, swapConfigFile.toPath(), REPLACE_EXISTING);
+                    }
+
+                    try {
+                        logger.info("Persisting changes to {}", configFile.getAbsolutePath());
+                        saveFile(newConfigBais, configFile);
+                        final String confDir = bootstrapProperties.getProperty(CONF_DIR_KEY);
+
+                        try {
+                            // Reset the input stream to provide to the transformer
+                            newConfigBais.reset();
+
+                            logger.info("Performing transformation for input and saving outputs to {}", confDir);
+                            ByteBuffer tempConfigFile = performTransformation(newConfigBais, confDir);
+                            runner.currentConfigFileReference.set(tempConfigFile.asReadOnlyBuffer());
+
+                            try {
+                                logger.info("Reloading instance with new configuration");
+                                restartInstance();
+                            } catch (Exception e) {
+                                logger.debug("Transformation of new config file failed after transformation into Flow.xml and nifi.properties, reverting.");
+                                ByteBuffer resetConfigFile = performTransformation(new FileInputStream(swapConfigFile), confDir);
+                                runner.currentConfigFileReference.set(resetConfigFile.asReadOnlyBuffer());
+                                throw e;
+                            }
+                        } catch (Exception e) {
+                            logger.debug("Transformation of new config file failed after replacing original with the swap file, reverting.");
+                            Files.copy(new FileInputStream(swapConfigFile), configFile.toPath(), REPLACE_EXISTING);
+                            throw e;
+                        }
+                    } catch (Exception e) {
+                        logger.debug("Transformation of new config file failed after swap file was created, deleting it.");
+                        if (!swapConfigFile.delete()) {
+                            logger.warn("The swap file failed to delete after a failed handling of a change. It should be cleaned up manually.");
+                        }
+                        throw e;
+                    }
+                }
+            } catch (ConfigurationChangeException e){
+                logger.error("Unable to carry out reloading of configuration on receipt of notification event", e);
+                throw e;
+            } catch (IOException ioe) {
+                logger.error("Unable to carry out reloading of configuration on receipt of notification event", ioe);
+                throw new ConfigurationChangeException("Unable to perform reload of received configuration change", ioe);
+            } finally {
+                try {
+                    if (configInputStream != null) {
+                        configInputStream.close() ;
+                    }
+                } catch (IOException e) {
+                    // Quietly close
+                }
+                handlingLock.unlock();
+            }
+        }
+
+        @Override
+        public String getDescriptor() {
+            return "MiNiFiConfigurationChangeListener";
+        }
+
+        private void saveFile(final InputStream configInputStream, File configFile) throws IOException {
+            try {
+                try (final FileOutputStream configFileOutputStream = new FileOutputStream(configFile)) {
+                    byte[] copyArray = new byte[1024];
+                    int available = -1;
+                    while ((available = configInputStream.read(copyArray)) > 0) {
+                        configFileOutputStream.write(copyArray, 0, available);
+                    }
+                }
+            } catch (IOException ioe) {
+                throw new IOException("Unable to save updated configuration to the configured config file location", ioe);
+            }
+        }
+
+        private void restartInstance() throws IOException {
+            try {
+                runner.reload();
+            } catch (IOException e) {
+                throw new IOException("Unable to successfully restart MiNiFi instance after configuration change.", e);
+            }
+        }
+    }
+
+    private static ByteBuffer performTransformation(InputStream configIs, String configDestinationPath) throws ConfigurationChangeException, IOException {
+        try (ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+             TeeInputStream teeInputStream = new TeeInputStream(configIs, byteArrayOutputStream)) {
+
+            ConfigTransformer.transformConfigFile(teeInputStream, configDestinationPath);
+
+            return ByteBuffer.wrap(byteArrayOutputStream.toByteArray());
+        } catch (ConfigurationChangeException e){
+            throw e;
+        } catch (Exception e) {
+            throw new IOException("Unable to successfully transform the provided configuration", e);
+        }
+    }
+
+    private static class Status {
+
+        private final Integer port;
+        private final String pid;
+
+        private final Boolean respondingToPing;
+        private final Boolean processRunning;
+
+        public Status(final Integer port, final String pid, final Boolean respondingToPing, final Boolean processRunning) {
+            this.port = port;
+            this.pid = pid;
+            this.respondingToPing = respondingToPing;
+            this.processRunning = processRunning;
+        }
+
+        public String getPid() {
+            return pid;
+        }
+
+        public Integer getPort() {
+            return port;
+        }
+
+        public boolean isRespondingToPing() {
+            return Boolean.TRUE.equals(respondingToPing);
+        }
+
+        public boolean isProcessRunning() {
+            return Boolean.TRUE.equals(processRunning);
+        }
+    }
+
+    public void shutdownChangeNotifier() {
+        try {
+            getChangeCoordinator().close();
+        } catch (IOException e) {
+            defaultLogger.warn("Could not successfully stop notifier ", e);
         }
     }
 }
