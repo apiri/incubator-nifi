@@ -96,7 +96,8 @@
         <module>nifi-druid-bundle</module>
         <module>nifi-jolt-record-bundle</module>
 		<module>nifi-network-bundle</module>
-  </modules>
+        <module>nifi-minifi-bundle</module>
+    </modules>
 
     <build>
         <plugins>
