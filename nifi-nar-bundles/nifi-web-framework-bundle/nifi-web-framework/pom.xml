@@ -20,9 +20,12 @@
         <version>1.9.0-SNAPSHOT</version>
     </parent>
     <artifactId>nifi-web-framework</artifactId>
-    <packaging>jar</packaging>
+    <packaging>pom</packaging>
     <description>NiFi: Web Framework</description>
     <properties>
 
     </properties>
+    <modules>
+        <module>nifi-web</module>
+    </modules>
 </project>
