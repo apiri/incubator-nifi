@@ -73,5 +73,13 @@ language governing permissions and limitations under the License. -->
             <artifactId>jna-platform</artifactId>
             <version>4.4.0</version>
         </dependency>
+
+        <!-- MiNiFi Dependencies -->
+        <dependency>
+            <groupId>org.apache.nifi.minifi</groupId>
+            <artifactId>minifi-commons-schema</artifactId>
+            <version>0.5.0</version>
+        </dependency>
+
     </dependencies>
 </project>
