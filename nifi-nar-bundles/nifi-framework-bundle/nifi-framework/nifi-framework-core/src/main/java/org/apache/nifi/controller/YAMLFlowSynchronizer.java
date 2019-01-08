@@ -150,41 +150,12 @@ import java.util.zip.GZIPInputStream;
 
 /**
  */
-public class YAMLFlowSynchronizer implements FlowSynchronizer {
+public class YAMLFlowSynchronizer extends AbstractFlowSynchronizer {
 
-    private static final Logger logger = LoggerFactory.getLogger(StandardFlowSynchronizer.class);
-    public static final URL FLOW_XSD_RESOURCE = StandardFlowSynchronizer.class.getResource("/FlowConfiguration.xsd");
-    private final StringEncryptor encryptor;
-    private final boolean autoResumeState;
-    private final NiFiProperties nifiProperties;
-    private final ExtensionManager extensionManager;
+    private static final Logger logger = LoggerFactory.getLogger(YAMLFlowSynchronizer.class);
 
     public YAMLFlowSynchronizer(final StringEncryptor encryptor, final NiFiProperties nifiProperties, final ExtensionManager extensionManager) {
-        this.encryptor = encryptor;
-        this.autoResumeState = nifiProperties.getAutoResumeState();
-        this.nifiProperties = nifiProperties;
-        this.extensionManager = extensionManager;
-    }
-
-    public static boolean isEmpty(final DataFlow dataFlow) {
-        if (dataFlow == null || dataFlow.getFlow() == null || dataFlow.getFlow().length == 0) {
-            return true;
-        }
-
-        final Document document = parseFlowBytes(dataFlow.getFlow());
-        final Element rootElement = document.getDocumentElement();
-
-        final Element rootGroupElement = (Element) rootElement.getElementsByTagName("rootGroup").item(0);
-        final FlowEncodingVersion encodingVersion = FlowEncodingVersion.parse(rootGroupElement);
-        final ProcessGroupDTO rootGroupDto = FlowFromDOMFactory.getProcessGroup(null, rootGroupElement, null, encodingVersion);
-
-        final NodeList reportingTasks = rootElement.getElementsByTagName("reportingTask");
-        final ReportingTaskDTO reportingTaskDTO = reportingTasks.getLength() == 0 ? null : FlowFromDOMFactory.getReportingTask((Element)reportingTasks.item(0),null);
-
-        final NodeList controllerServices = rootElement.getElementsByTagName("controllerService");
-        final ControllerServiceDTO controllerServiceDTO = controllerServices.getLength() == 0 ? null : FlowFromDOMFactory.getControllerService((Element)controllerServices.item(0),null);
-
-        return isEmpty(rootGroupDto) && isEmpty(reportingTaskDTO) && isEmpty(controllerServiceDTO);
+        super(encryptor, nifiProperties, extensionManager);
     }
 
     @Override
@@ -563,105 +534,6 @@ public class YAMLFlowSynchronizer implements FlowSynchronizer {
             }
         }
     }
-
-//    private void addLocalTemplates(final Element processGroupElement, final ProcessGroup processGroup, final FlowEncodingVersion encodingVersion) {
-//        // Replace the templates with those from the proposed flow
-//        final List<Element> templateNodeList = getChildrenByTagName(processGroupElement, "template");
-//        if (templateNodeList != null) {
-//            for (final Element templateElement : templateNodeList) {
-//                final TemplateDTO templateDto = TemplateUtils.parseDto(templateElement);
-//                final Template template = new Template(templateDto);
-//
-//                // If the Process Group does not have the template, add it.
-//                if (processGroup.getTemplate(template.getIdentifier()) == null) {
-//                    processGroup.addTemplate(template);
-//                }
-//            }
-//        }
-//
-//        final List<Element> childGroupElements = getChildrenByTagName(processGroupElement, "processGroup");
-//        for (final Element childGroupElement : childGroupElements) {
-//            final String childGroupId = getString(childGroupElement, "id");
-//            final ProcessGroup childGroup = processGroup.getProcessGroup(childGroupId);
-//            addLocalTemplates(childGroupElement, childGroup, encodingVersion);
-//        }
-//    }
-
-//    void scaleRootGroup(final ProcessGroup rootGroup, final FlowEncodingVersion encodingVersion) {
-//        if (encodingVersion == null || encodingVersion.getMajorVersion() < 1) {
-//            // Calculate new Positions if the encoding version of the flow is older than 1.0.
-//            PositionScaler.scale(rootGroup, 1.5, 1.34);
-//        }
-//    }
-
-    private static boolean isEmpty(final ProcessGroupDTO dto) {
-        if (dto == null) {
-            return true;
-        }
-
-        final FlowSnippetDTO contents = dto.getContents();
-        if (contents == null) {
-            return true;
-        }
-
-        return CollectionUtils.isEmpty(contents.getProcessors())
-                && CollectionUtils.isEmpty(contents.getConnections())
-                && CollectionUtils.isEmpty(contents.getFunnels())
-                && CollectionUtils.isEmpty(contents.getLabels())
-                && CollectionUtils.isEmpty(contents.getOutputPorts())
-                && CollectionUtils.isEmpty(contents.getProcessGroups())
-                && CollectionUtils.isEmpty(contents.getProcessors())
-                && CollectionUtils.isEmpty(contents.getRemoteProcessGroups());
-    }
-
-    private static boolean isEmpty(final ReportingTaskDTO reportingTaskDTO){
-
-        return reportingTaskDTO == null || StringUtils.isEmpty(reportingTaskDTO.getName()) ;
-
-    }
-
-    private static boolean isEmpty(final ControllerServiceDTO controllerServiceDTO){
-
-        return controllerServiceDTO == null || StringUtils.isEmpty(controllerServiceDTO.getName());
-
-    }
-
-    private static Document parseFlowBytes(final byte[] flow) throws FlowSerializationException {
-        // create document by parsing proposed flow bytes
-        try {
-            // create validating document builder
-            final SchemaFactory schemaFactory = SchemaFactory.newInstance(XMLConstants.W3C_XML_SCHEMA_NS_URI);
-            final Schema schema = schemaFactory.newSchema(FLOW_XSD_RESOURCE);
-            final DocumentBuilderFactory docFactory = DocumentBuilderFactory.newInstance();
-            docFactory.setNamespaceAware(true);
-            docFactory.setSchema(schema);
-
-            final DocumentBuilder docBuilder = docFactory.newDocumentBuilder();
-            docBuilder.setErrorHandler(new LoggingXmlParserErrorHandler("Flow Configuration", logger));
-
-            // parse flow
-            return (flow == null || flow.length == 0) ? null : docBuilder.parse(new ByteArrayInputStream(flow));
-        } catch (final SAXException | ParserConfigurationException | IOException ex) {
-            throw new FlowSerializationException(ex);
-        }
-    }
-
-    private byte[] readFlowFromDisk() throws IOException {
-        final Path flowPath = nifiProperties.getFlowConfigurationFile().toPath();
-        if (!Files.exists(flowPath) || Files.size(flowPath) == 0) {
-            return new byte[0];
-        }
-
-        final ByteArrayOutputStream baos = new ByteArrayOutputStream();
-
-        try (final InputStream in = Files.newInputStream(flowPath, StandardOpenOption.READ);
-             final InputStream gzipIn = new GZIPInputStream(in)) {
-            FileUtils.copy(gzipIn, baos);
-        }
-
-        return baos.toByteArray();
-    }
-
 
     private ReportingTaskNode getOrCreateReportingTask(final FlowController controller, final ReportingTaskDTO dto, final boolean controllerInitialized, final boolean existingFlowEmpty)
             throws ReportingTaskInstantiationException {
