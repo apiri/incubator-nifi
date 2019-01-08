@@ -9,6 +9,8 @@ import org.apache.nifi.controller.serialization.FlowSerializationException;
 import org.apache.nifi.controller.serialization.FlowSynchronizer;
 import org.apache.nifi.encrypt.StringEncryptor;
 import org.apache.nifi.nar.ExtensionManager;
+import org.apache.nifi.util.BundleUtils;
+import org.apache.nifi.util.DomUtils;
 import org.apache.nifi.util.LoggingXmlParserErrorHandler;
 import org.apache.nifi.util.NiFiProperties;
 import org.apache.nifi.util.file.FileUtils;
@@ -20,6 +22,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
+import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 import org.xml.sax.SAXException;
 
@@ -54,6 +57,43 @@ public abstract class AbstractFlowSynchronizer implements FlowSynchronizer {
         this.autoResumeState = nifiProperties.getAutoResumeState();
         this.nifiProperties = nifiProperties;
         this.extensionManager = extensionManager;
+    }
+
+
+    protected void checkBundleCompatibility(final Document configuration) {
+        final NodeList bundleNodes = configuration.getElementsByTagName("bundle");
+        for (int i = 0; i < bundleNodes.getLength(); i++) {
+            final Node bundleNode = bundleNodes.item(i);
+            if (bundleNode instanceof Element) {
+                final Element bundleElement = (Element) bundleNode;
+
+                final Node componentNode = bundleElement.getParentNode();
+                if (componentNode instanceof Element) {
+                    final Element componentElement = (Element) componentNode;
+                    if (!withinTemplate(componentElement)) {
+                        final String componentType = DomUtils.getChildText(componentElement, "class");
+                        try {
+                            BundleUtils.getBundle(extensionManager, componentType, FlowFromDOMFactory.getBundle(bundleElement));
+                        } catch (IllegalStateException e) {
+                            throw new MissingBundleException(e.getMessage(), e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    protected boolean withinTemplate(final Element element) {
+        if ("template".equals(element.getTagName())) {
+            return true;
+        } else {
+            final Node parentNode = element.getParentNode();
+            if (parentNode instanceof Element) {
+                return withinTemplate((Element) parentNode);
+            } else {
+                return false;
+            }
+        }
     }
 
     public static boolean isEmpty(final DataFlow dataFlow) {

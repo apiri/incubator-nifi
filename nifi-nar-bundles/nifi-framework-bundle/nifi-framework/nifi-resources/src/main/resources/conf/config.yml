@@ -67,7 +67,7 @@ Processors:
   run duration nanos: 0
   auto-terminated relationships list: []
   Properties:
-    File to Tail: logs/minifi-app.log
+    File to Tail: logs/nifi-app.log
     Initial Start Position: Beginning of File
     Rolling Filename Pattern: minifi-app*
 Connections:
