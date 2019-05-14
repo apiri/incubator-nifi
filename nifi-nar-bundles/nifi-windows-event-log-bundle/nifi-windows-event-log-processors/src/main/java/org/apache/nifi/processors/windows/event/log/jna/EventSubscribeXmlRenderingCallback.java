@@ -18,12 +18,15 @@
 package org.apache.nifi.processors.windows.event.log.jna;
 
 import com.sun.jna.Memory;
+import com.sun.jna.Pointer;
 import com.sun.jna.platform.win32.Kernel32;
 import com.sun.jna.platform.win32.W32Errors;
 import com.sun.jna.platform.win32.WinDef;
 import com.sun.jna.platform.win32.WinNT;
+
 import java.nio.charset.StandardCharsets;
 import java.util.function.Consumer;
+
 import org.apache.nifi.logging.ComponentLog;
 
 /**
@@ -63,14 +66,25 @@ public class EventSubscribeXmlRenderingCallback implements WEvtApi.EVT_SUBSCRIBE
     @Override
     public synchronized int onEvent(int evtSubscribeNotifyAction, WinDef.PVOID userContext, WinNT.HANDLE eventHandle) {
         if (logger.isDebugEnabled()) {
-            logger.debug("onEvent(" + evtSubscribeNotifyAction + ", " + userContext + ", " + eventHandle);
+            logger.debug("onEvent(" + evtSubscribeNotifyAction + ", " + userContext + ", " + eventHandle + " with pointer " + eventHandle.getPointer().toString());
         }
 
         if (evtSubscribeNotifyAction == WEvtApi.EvtSubscribeNotifyAction.ERROR) {
-            if (eventHandle.getPointer().getInt(0) == WEvtApi.EvtSubscribeErrors.ERROR_EVT_QUERY_RESULT_STALE) {
-                logger.error(MISSING_EVENT_MESSAGE);
-            } else {
-                logger.error(RECEIVED_THE_FOLLOWING_WIN32_ERROR + eventHandle.getPointer().getInt(0));
+            if (eventHandle != null) {
+                final Pointer evtHandlePtr = eventHandle.getPointer();
+                if (evtHandlePtr != null) {
+                    try {
+                        if (evtHandlePtr.getInt(0) == WEvtApi.EvtSubscribeErrors.ERROR_EVT_QUERY_RESULT_STALE) {
+                            logger.error(MISSING_EVENT_MESSAGE);
+                        } else {
+                            logger.error(RECEIVED_THE_FOLLOWING_WIN32_ERROR + evtHandlePtr.getInt(0));
+                        }
+                    } catch (Error e) {
+                        logger.error("Error attempting to get int from non-null evtHandlePtr");
+                    }
+                } else {
+                    logger.error("Pointer to event handle was null");
+                }
             }
         } else if (evtSubscribeNotifyAction == WEvtApi.EvtSubscribeNotifyAction.DELIVER) {
             wEvtApi.EvtRender(null, eventHandle, WEvtApi.EvtRenderFlags.EVENT_XML, size, buffer, used, propertyCount);
